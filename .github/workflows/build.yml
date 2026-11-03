@@ -1,0 +1,84 @@
+name: Build Ludo Rooms
+
+on:
+  push:
+  workflow_dispatch:
+    inputs:
+      server_url:
+        description: "عنوان الخادم الافتراضي داخل التطبيق (اختياري)"
+        required: false
+        default: ""
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Finds a .zip in the repo root, extracts it, and locates the project folder.
+      # If there is no zip but android/ and backend/ are already in the repo, it uses those.
+      - name: Unzip project automatically
+        run: |
+          set -e
+          ZIP=$(ls -1 *.zip 2>/dev/null | head -n 1 || true)
+          if [ -n "$ZIP" ]; then
+            echo "Extracting $ZIP"
+            mkdir -p _src
+            unzip -q -o "$ZIP" -d _src
+            ANDROID_DIR=$(find _src -maxdepth 3 -type d -name android | head -n 1)
+            [ -n "$ANDROID_DIR" ] || { echo "::error::no android/ folder inside $ZIP"; exit 1; }
+            ROOT=$(dirname "$ANDROID_DIR")
+          elif [ -d android ] && [ -d backend ]; then
+            ROOT=.
+          else
+            echo "::error::Upload ludo-rooms.zip to the repository root (or push the android/ and backend/ folders)."
+            exit 1
+          fi
+          echo "PROJECT_ROOT=$ROOT" >> "$GITHUB_ENV"
+          echo "Project root: $ROOT"
+          ls "$ROOT"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Backend tests
+        working-directory: ${{ env.PROJECT_ROOT }}/backend
+        run: npm test
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install SDK packages
+        run: |
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager "platforms;android-34" "build-tools;34.0.0"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.7
+
+      - name: Build debug APK
+        working-directory: ${{ env.PROJECT_ROOT }}/android
+        env:
+          SERVER_URL: ${{ inputs.server_url || vars.SERVER_URL || 'http://10.0.2.2:8080' }}
+        run: gradle assembleDebug --stacktrace -PserverUrl="$SERVER_URL"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: ludo-rooms-debug-apk
+          path: ${{ env.PROJECT_ROOT }}/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+      - name: Upload build reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-reports
+          path: ${{ env.PROJECT_ROOT }}/android/app/build/reports
+          if-no-files-found: ignore
