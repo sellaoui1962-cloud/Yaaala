@@ -70,7 +70,30 @@ jobs:
         working-directory: ${{ env.PROJECT_ROOT }}/android
         env:
           SERVER_URL: ${{ inputs.server_url || vars.SERVER_URL || 'http://10.0.2.2:8080' }}
-        run: gradle assembleDebug --stacktrace -PserverUrl="$SERVER_URL"
+        run: |
+          set -o pipefail
+          gradle assembleDebug --console=plain -PserverUrl="$SERVER_URL" 2>&1 | tee "$RUNNER_TEMP/build.log"
+
+      - name: Summarize build errors
+        if: failure()
+        run: |
+          LOG="$RUNNER_TEMP/build.log"
+          {
+            echo "## Build errors (first lines are the important ones)"
+            echo '```'
+            grep -E '^e: ' "$LOG" | sed 's#file://.*/ludo-rooms/##; s#file://.*/_src/##' | head -40
+            echo '--- Gradle summary ---'
+            awk '/What went wrong:/{f=1} f{print} /\* Try:/{exit}' "$LOG" | head -25
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload full build log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: ${{ runner.temp }}/build.log
+          if-no-files-found: ignore
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
@@ -78,11 +101,3 @@ jobs:
           name: ludo-rooms-debug-apk
           path: ${{ env.PROJECT_ROOT }}/android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
-
-      - name: Upload build reports
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-reports
-          path: ${{ env.PROJECT_ROOT }}/android/app/build/reports
-          if-no-files-found: ignore
